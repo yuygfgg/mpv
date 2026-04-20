@@ -392,7 +392,21 @@ struct mp_decoder_list *audio_decoder_list(void)
 {
     struct mp_decoder_list *list = talloc_zero(NULL, struct mp_decoder_list);
     ad_lavc.add_decoders(list);
+    ad_eac3joc.add_decoders(list);
     return list;
+}
+
+static void add_audio_decoders(struct mp_decoder_list *list)
+{
+    ad_lavc.add_decoders(list);
+    ad_eac3joc.add_decoders(list);
+}
+
+static const struct mp_decoder_fns *audio_driver_for_decoder(const char *decoder)
+{
+    if (decoder && strcmp(decoder, "eac3joc") == 0)
+        return &ad_eac3joc;
+    return &ad_lavc;
 }
 
 static bool reinit_decoder(struct priv *p)
@@ -408,6 +422,7 @@ static bool reinit_decoder(struct priv *p)
     struct mp_decoder_list *list = NULL;
     char *user_list = NULL;
     char *fallback = NULL;
+    bool dynamic_audio_driver = false;
 
     if (p->codec->type == STREAM_VIDEO) {
         driver = &vd_lavc;
@@ -432,6 +447,9 @@ static bool reinit_decoder(struct priv *p)
                 talloc_free(spdif);
             }
         }
+
+        if (!list)
+            dynamic_audio_driver = true;
     }
 
     if (!driver)
@@ -439,7 +457,11 @@ static bool reinit_decoder(struct priv *p)
 
     if (!list) {
         struct mp_decoder_list *full = talloc_zero(NULL, struct mp_decoder_list);
-        driver->add_decoders(full);
+        if (dynamic_audio_driver) {
+            add_audio_decoders(full);
+        } else {
+            driver->add_decoders(full);
+        }
         const char *codec = p->codec->codec;
         if (codec && strcmp(codec, "null") == 0)
             codec = fallback;
@@ -451,9 +473,14 @@ static bool reinit_decoder(struct priv *p)
 
     for (int n = 0; n < list->num_entries; n++) {
         struct mp_decoder_entry *sel = &list->entries[n];
+        const struct mp_decoder_fns *sel_driver = driver;
+
+        if (dynamic_audio_driver)
+            sel_driver = audio_driver_for_decoder(sel->decoder);
+
         MP_VERBOSE(p, "Opening decoder %s\n", sel->decoder);
 
-        p->decoder = driver->create(p->decf, p->codec, sel->decoder);
+        p->decoder = sel_driver->create(p->decf, p->codec, sel->decoder);
         if (p->decoder) {
             p->codec->decoder = talloc_strdup(p, sel->decoder);
             p->codec->decoder_desc = talloc_strdup(p, sel->desc && sel->desc[0] ? sel->desc : NULL);

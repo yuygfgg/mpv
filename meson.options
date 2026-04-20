@@ -115,6 +115,8 @@ option('macos-touchbar', type: 'feature', value: 'auto', description: 'macOS Tou
 option('macos-bundle-category', type : 'combo', choices : ['video', 'games'], value : 'video', description: 'macOS bundle category')
 option('swift-build', type: 'feature', value: 'auto', description: 'macOS Swift build tools')
 option('swift-flags', type: 'string', description: 'Optional Swift compiler flags')
+option('starmine-ad-incdir', type: 'string', value: '', description: 'Path to libstarmine_ad public headers')
+option('starmine-ad-libdir', type: 'string', value: '', description: 'Path to libstarmine_ad static library directory')
 
 # Windows features
 option('win32-smtc', type: 'feature', value: 'auto', description: 'Enable Media Control support')

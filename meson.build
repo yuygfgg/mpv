@@ -60,6 +60,7 @@ sources = files(
     'audio/chmap_avchannel.c',
     'audio/chmap_sel.c',
     'audio/decode/ad_lavc.c',
+    'audio/decode/ad_eac3joc.c',
     'audio/decode/ad_spdif.c',
     'audio/filter/af_drop.c',
     'audio/filter/af_format.c',
@@ -357,6 +358,14 @@ endif
 
 # C11 atomics are mandatory but linking to the library is not always required.
 dependencies += cc.find_library('atomic', required: false)
+starmine_ad_incdir = get_option('starmine-ad-incdir')
+starmine_ad_libdir = get_option('starmine-ad-libdir')
+if starmine_ad_incdir == '' or starmine_ad_libdir == ''
+    error('This fork requires -Dstarmine-ad-incdir and -Dstarmine-ad-libdir')
+endif
+flags += ['-I' + starmine_ad_incdir]
+starmine_ad = cc.find_library('starmine_ad', dirs: [starmine_ad_libdir], required: true)
+dependencies += starmine_ad
 
 cplugins = get_option('cplugins').require(
     win32 or (features['libdl'] and cc.has_link_argument('-rdynamic')),
@@ -804,7 +813,7 @@ endif
 
 audiounit_opt = get_option('audiounit').require(darwin)
 audiounit = {
-    'deps': dependency('appleframeworks', modules: ['Foundation', 'AudioToolbox'],
+    'deps': dependency('appleframeworks', modules: ['Foundation', 'AudioToolbox', 'AVFoundation'],
                        required: audiounit_opt),
     'symbol': cc.has_header_symbol('AudioToolbox/AudioToolbox.h', 'kAudioUnitSubType_RemoteIO',
                                    required: audiounit_opt),
@@ -831,6 +840,10 @@ if features['coreaudio']
     sources += files('audio/out/ao_coreaudio.c',
                      'audio/out/ao_coreaudio_exclusive.c',
                      'audio/out/ao_coreaudio_properties.c')
+endif
+
+if features['coreaudio'] or features['audiounit']
+    sources += files('audio/out/ao_coreaudio_spatial714.m')
 endif
 
 if features['audiounit'] or features['coreaudio'] or features['avfoundation']

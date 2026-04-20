@@ -105,6 +105,7 @@ struct mp_decoder_fns {
 
 extern const struct mp_decoder_fns vd_lavc;
 extern const struct mp_decoder_fns ad_lavc;
+extern const struct mp_decoder_fns ad_eac3joc;
 extern const struct mp_decoder_fns ad_spdif;
 
 // Convenience wrapper for lavc based decoders. Treat lavc_state as private;
