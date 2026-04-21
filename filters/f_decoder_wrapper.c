@@ -393,6 +393,7 @@ struct mp_decoder_list *audio_decoder_list(void)
     struct mp_decoder_list *list = talloc_zero(NULL, struct mp_decoder_list);
     ad_lavc.add_decoders(list);
     ad_eac3joc.add_decoders(list);
+    ad_truehd.add_decoders(list);
     return list;
 }
 
@@ -400,12 +401,15 @@ static void add_audio_decoders(struct mp_decoder_list *list)
 {
     ad_lavc.add_decoders(list);
     ad_eac3joc.add_decoders(list);
+    ad_truehd.add_decoders(list);
 }
 
 static const struct mp_decoder_fns *audio_driver_for_decoder(const char *decoder)
 {
     if (decoder && strcmp(decoder, "eac3joc") == 0)
         return &ad_eac3joc;
+    if (decoder && strcmp(decoder, "truehdatmos") == 0)
+        return &ad_truehd;
     return &ad_lavc;
 }
 

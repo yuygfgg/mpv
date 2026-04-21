@@ -61,6 +61,7 @@ sources = files(
     'audio/chmap_sel.c',
     'audio/decode/ad_lavc.c',
     'audio/decode/ad_eac3joc.c',
+    'audio/decode/ad_truehd.c',
     'audio/decode/ad_spdif.c',
     'audio/filter/af_drop.c',
     'audio/filter/af_format.c',

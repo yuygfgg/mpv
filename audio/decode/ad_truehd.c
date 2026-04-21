@@ -25,9 +25,6 @@
 #include "config.h"
 
 #include "mpv_talloc.h"
-#include "audio/aframe.h"
-#include "audio/chmap.h"
-#include "audio/format.h"
 #include "common/av_common.h"
 #include "common/codecs.h"
 #include "common/msg.h"
@@ -50,9 +47,10 @@ struct priv {
     bool pending_packet_pts_used;
     bool draining;
     bool renderer_flushed;
+    bool parser_used;
     double next_pts;
     struct mp_aframe_pool *pool;
-    starmine_ad_eac3_renderer_714 *renderer;
+    starmine_ad_truehd_renderer_714 *renderer;
     struct lavc_state state;
 
     struct mp_decoder public;
@@ -73,11 +71,11 @@ static void clear_pending_packet(struct mp_filter *ad)
 static bool init_parser(struct mp_filter *ad)
 {
     struct priv *ctx = ad->priv;
-    const AVCodec *codec = avcodec_find_decoder(AV_CODEC_ID_EAC3);
+    const AVCodec *codec = avcodec_find_decoder(AV_CODEC_ID_TRUEHD);
 
-    ctx->parser = av_parser_init(AV_CODEC_ID_EAC3);
+    ctx->parser = av_parser_init(AV_CODEC_ID_TRUEHD);
     if (!ctx->parser) {
-        MP_ERR(ad, "failed to create E-AC-3 parser\n");
+        MP_ERR(ad, "failed to create TrueHD parser\n");
         return false;
     }
 
@@ -90,7 +88,7 @@ static bool init_parser(struct mp_filter *ad)
     }
 
     ctx->parser_ctx->codec_type = AVMEDIA_TYPE_AUDIO;
-    ctx->parser_ctx->codec_id = AV_CODEC_ID_EAC3;
+    ctx->parser_ctx->codec_id = AV_CODEC_ID_TRUEHD;
     ctx->parser_ctx->pkt_timebase = ctx->codec_timebase;
     mp_set_avctx_codec_headers(ctx->parser_ctx, ctx->codec);
     return true;
@@ -108,11 +106,11 @@ static bool reinit_parser(struct mp_filter *ad)
     return init_parser(ad);
 }
 
-static double access_unit_duration(const starmine_ad_eac3_access_unit_info *info,
+static double access_unit_duration(const starmine_ad_truehd_access_unit_info *info,
                                    const starmine_ad_render_714_frame *frame)
 {
-    if (info->sample_rate && info->num_blocks) {
-        return (256.0 * info->num_blocks) / info->sample_rate;
+    if (info->has_frame && info->sample_rate && info->samples_per_channel) {
+        return (double)info->samples_per_channel / info->sample_rate;
     }
     return starmine_render_frame_duration(frame);
 }
@@ -122,22 +120,22 @@ static int decode_access_unit(struct mp_filter *ad,
                               struct mp_frame *out)
 {
     struct priv *ctx = ad->priv;
-    starmine_ad_eac3_access_unit_info info;
+    starmine_ad_truehd_access_unit_info info;
     starmine_ad_render_714_frame frame;
     starmine_ad_status status;
     double pts = ctx->next_pts;
     double duration = 0.0;
 
-    if (starmine_ad_eac3_access_unit_info_init(&info) != STARMINE_AD_STATUS_OK ||
+    if (starmine_ad_truehd_access_unit_info_init(&info) != STARMINE_AD_STATUS_OK ||
         starmine_ad_render_714_frame_init(&frame) != STARMINE_AD_STATUS_OK)
     {
         MP_ERR(ad, "failed to initialize Starmine output structs\n");
         return AVERROR(EINVAL);
     }
 
-    status = starmine_ad_eac3_renderer_714_push_access_unit(ctx->renderer,
-                                                            data, len,
-                                                            &info, &frame);
+    status = starmine_ad_truehd_renderer_714_push_access_unit(ctx->renderer,
+                                                              data, len,
+                                                              &info, &frame);
     if (status != STARMINE_AD_STATUS_OK) {
         if (starmine_status_is_oamd_warmup(status))
             return AVERROR(EAGAIN);
@@ -181,7 +179,7 @@ static int receive_renderer_flush_frame(struct mp_filter *ad, struct mp_frame *o
     }
 
     ctx->renderer_flushed = true;
-    status = starmine_ad_eac3_renderer_714_flush(ctx->renderer, &frame);
+    status = starmine_ad_truehd_renderer_714_flush(ctx->renderer, &frame);
     if (status != STARMINE_AD_STATUS_OK) {
         MP_ERR(ad, "Starmine flush failed: %s\n",
                starmine_ad_status_string(status));
@@ -205,34 +203,35 @@ static bool init(struct mp_filter *ad, struct mp_codec_params *codec,
 {
     struct priv *ctx = ad->priv;
 
-    if (strcmp(decoder, "eac3joc") != 0)
+    if (strcmp(decoder, "truehdatmos") != 0)
         return false;
-    if (!codec->codec || strcmp(codec->codec, "eac3") != 0)
+    if (!codec->codec || strcmp(codec->codec, "truehd") != 0)
         return false;
 
     ctx->codec = codec;
     ctx->codec_timebase = mp_get_codec_timebase(codec);
     ctx->pool = mp_aframe_pool_create(ctx);
-    ctx->renderer = starmine_ad_eac3_renderer_714_new();
+    ctx->renderer = starmine_ad_truehd_renderer_714_new();
     if (!ctx->renderer) {
-        MP_ERR(ad, "failed to create E-AC-3 JOC renderer\n");
+        MP_ERR(ad, "failed to create TrueHD Atmos renderer\n");
         return false;
     }
 
     ctx->next_pts = MP_NOPTS_VALUE;
     ctx->renderer_flushed = false;
+    ctx->parser_used = false;
     if (!init_parser(ad)) {
-        starmine_ad_eac3_renderer_714_free(ctx->renderer);
+        starmine_ad_truehd_renderer_714_free(ctx->renderer);
         ctx->renderer = NULL;
         return false;
     }
 
-    codec->decoder = "eac3joc";
-    codec->decoder_desc = "E-AC-3 JOC decoder";
+    codec->decoder = "truehdatmos";
+    codec->decoder_desc = "TrueHD Atmos decoder";
     return true;
 }
 
-static void ad_eac3joc_destroy(struct mp_filter *ad)
+static void ad_truehd_destroy(struct mp_filter *ad)
 {
     struct priv *ctx = ad->priv;
 
@@ -243,22 +242,23 @@ static void ad_eac3joc_destroy(struct mp_filter *ad)
     }
     avcodec_free_context(&ctx->parser_ctx);
     if (ctx->renderer) {
-        starmine_ad_eac3_renderer_714_free(ctx->renderer);
+        starmine_ad_truehd_renderer_714_free(ctx->renderer);
         ctx->renderer = NULL;
     }
 }
 
-static void ad_eac3joc_reset(struct mp_filter *ad)
+static void ad_truehd_reset(struct mp_filter *ad)
 {
     struct priv *ctx = ad->priv;
 
     clear_pending_packet(ad);
     ctx->draining = false;
     ctx->renderer_flushed = false;
+    ctx->parser_used = false;
     ctx->next_pts = MP_NOPTS_VALUE;
     ctx->state = (struct lavc_state){0};
     if (ctx->renderer)
-        starmine_ad_eac3_renderer_714_reset(ctx->renderer);
+        starmine_ad_truehd_renderer_714_reset(ctx->renderer);
     reinit_parser(ad);
 }
 
@@ -293,6 +293,24 @@ static int send_packet(struct mp_filter *ad, struct demux_packet *mpkt)
 static int receive_packet_frame(struct mp_filter *ad, struct mp_frame *out)
 {
     struct priv *ctx = ad->priv;
+
+    if (!ctx->pending_packet)
+        return AVERROR(EAGAIN);
+
+    if (ctx->pending_packet_offset == 0 &&
+        starmine_truehd_packet_is_single_access_unit(ctx->pending_packet->buffer,
+                                                     ctx->pending_packet->len))
+    {
+        const uint8_t *data = ctx->pending_packet->buffer;
+        size_t len = ctx->pending_packet->len;
+        int ret = 0;
+
+        ctx->pending_packet_pts_used = true;
+        ret = decode_access_unit(ad, data, len, out);
+        clear_pending_packet(ad);
+        return ret;
+    }
+
     uint8_t *access_unit = NULL;
     int access_unit_size = 0;
     const uint8_t *data = ctx->pending_packet->buffer + ctx->pending_packet_offset;
@@ -307,17 +325,18 @@ static int receive_packet_frame(struct mp_filter *ad, struct mp_frame *out)
         pos = ctx->pending_packet->pos;
     }
 
+    ctx->parser_used = true;
     int consumed = av_parser_parse2(ctx->parser, ctx->parser_ctx, &access_unit,
                                     &access_unit_size, data, size,
                                     pts, dts, pos);
     if (consumed < 0) {
-        MP_ERR(ad, "E-AC-3 parser failed\n");
+        MP_ERR(ad, "TrueHD parser failed\n");
         clear_pending_packet(ad);
         return AVERROR_INVALIDDATA;
     }
 
     if (consumed == 0 && access_unit_size == 0 && size > 0) {
-        MP_ERR(ad, "E-AC-3 parser made no progress\n");
+        MP_ERR(ad, "TrueHD parser made no progress\n");
         clear_pending_packet(ad);
         return AVERROR_INVALIDDATA;
     }
@@ -336,23 +355,24 @@ static int receive_packet_frame(struct mp_filter *ad, struct mp_frame *out)
 static int receive_flush_frame(struct mp_filter *ad, struct mp_frame *out)
 {
     struct priv *ctx = ad->priv;
-    uint8_t *access_unit = NULL;
-    int access_unit_size = 0;
-    int consumed = av_parser_parse2(ctx->parser, ctx->parser_ctx, &access_unit,
-                                    &access_unit_size, NULL, 0,
-                                    AV_NOPTS_VALUE, AV_NOPTS_VALUE, -1);
 
-    if (consumed < 0) {
-        MP_ERR(ad, "E-AC-3 parser flush failed\n");
-        ctx->draining = false;
-        return AVERROR_INVALIDDATA;
+    if (ctx->parser_used) {
+        uint8_t *access_unit = NULL;
+        int access_unit_size = 0;
+        int consumed = av_parser_parse2(ctx->parser, ctx->parser_ctx, &access_unit,
+                                        &access_unit_size, NULL, 0,
+                                        AV_NOPTS_VALUE, AV_NOPTS_VALUE, -1);
+
+        if (consumed < 0) {
+            MP_ERR(ad, "TrueHD parser flush failed\n");
+            return AVERROR_INVALIDDATA;
+        }
+
+        if (access_unit_size > 0)
+            return decode_access_unit(ad, access_unit, access_unit_size, out);
     }
 
-    if (access_unit_size <= 0) {
-        return receive_renderer_flush_frame(ad, out);
-    }
-
-    return decode_access_unit(ad, access_unit, access_unit_size, out);
+    return receive_renderer_flush_frame(ad, out);
 }
 
 static int receive_frame(struct mp_filter *ad, struct mp_frame *out)
@@ -378,26 +398,26 @@ static int receive_frame(struct mp_filter *ad, struct mp_frame *out)
     }
 }
 
-static void ad_eac3joc_process(struct mp_filter *ad)
+static void ad_truehd_process(struct mp_filter *ad)
 {
     struct priv *ctx = ad->priv;
 
     lavc_process(ad, &ctx->state, send_packet, receive_frame);
 }
 
-static const struct mp_filter_info ad_eac3joc_filter = {
-    .name = "ad_eac3joc",
+static const struct mp_filter_info ad_truehd_filter = {
+    .name = "ad_truehd",
     .priv_size = sizeof(struct priv),
-    .process = ad_eac3joc_process,
-    .reset = ad_eac3joc_reset,
-    .destroy = ad_eac3joc_destroy,
+    .process = ad_truehd_process,
+    .reset = ad_truehd_reset,
+    .destroy = ad_truehd_destroy,
 };
 
 static struct mp_decoder *create(struct mp_filter *parent,
                                  struct mp_codec_params *codec,
                                  const char *decoder)
 {
-    struct mp_filter *ad = mp_filter_create(parent, &ad_eac3joc_filter);
+    struct mp_filter *ad = mp_filter_create(parent, &ad_truehd_filter);
     if (!ad)
         return NULL;
 
@@ -419,11 +439,11 @@ static struct mp_decoder *create(struct mp_filter *parent,
 
 static void add_decoders(struct mp_decoder_list *list)
 {
-    mp_add_decoder(list, "eac3", "eac3joc",
-                   "E-AC-3 JOC decoder");
+    mp_add_decoder(list, "truehd", "truehdatmos",
+                   "TrueHD Atmos decoder");
 }
 
-const struct mp_decoder_fns ad_eac3joc = {
+const struct mp_decoder_fns ad_truehd = {
     .create = create,
     .add_decoders = add_decoders,
 };
