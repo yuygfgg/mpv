@@ -389,9 +389,10 @@ static void af_scaletempo_process(struct mp_filter *f)
         out_offset += s->bytes_stride;
 
         // input stride
-        memcpy(s->buf_overlap,
-               s->buf_queue + bytes_off + s->bytes_stride,
-               s->bytes_overlap);
+        if (s->buf_overlap && s->bytes_overlap)
+            memcpy(s->buf_overlap,
+                   s->buf_queue + bytes_off + s->bytes_stride,
+                   s->bytes_overlap);
         tf = s->frames_stride_scaled + s->frames_stride_error;
         ti = (int)tf;
         s->frames_stride_error = tf - ti;
@@ -456,7 +457,7 @@ static bool reinit(struct mp_filter *f)
 
     mp_aframe_reset(s->cur_format);
 
-    float srate  = mp_aframe_get_rate(s->in) / 1000.0;
+    float srate  = mp_aframe_get_rate(s->in) / 1000.0f;
     int nch = mp_aframe_get_channels(s->in);
     int format = mp_aframe_get_format(s->in);
 
@@ -652,10 +653,10 @@ const struct mp_user_filter_entry af_scaletempo = {
             .scale_nominal = 1.0,
         },
         .options = (const struct m_option[]) {
-            {"scale", OPT_FLOAT(scale_nominal), M_RANGE(0.01, FLT_MAX)},
-            {"stride", OPT_FLOAT(ms_stride), M_RANGE(0.01, FLT_MAX)},
+            {"scale", OPT_FLOAT(scale_nominal), M_RANGE(0.01, 1e5f)},
+            {"stride", OPT_FLOAT(ms_stride), M_RANGE(0.01, 1e5f)},
             {"overlap", OPT_FLOAT(factor_overlap), M_RANGE(0, 1)},
-            {"search", OPT_FLOAT(ms_search), M_RANGE(0, FLT_MAX)},
+            {"search", OPT_FLOAT(ms_search), M_RANGE(0, 1e5f)},
             {"speed", OPT_CHOICE(speed_opt,
                 {"pitch", SCALE_PITCH},
                 {"tempo", SCALE_TEMPO},

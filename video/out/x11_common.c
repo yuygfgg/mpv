@@ -174,10 +174,12 @@ static char *x11_atom_name_buf(struct vo_x11_state *x11, Atom atom,
 {
     buf[0] = '\0';
 
-    char *new_name = XGetAtomName(x11->display, atom);
-    if (new_name) {
-        snprintf(buf, buf_size, "%s", new_name);
-        XFree(new_name);
+    if (atom != None) {
+        char *new_name = XGetAtomName(x11->display, atom);
+        if (new_name) {
+            snprintf(buf, buf_size, "%s", new_name);
+            XFree(new_name);
+        }
     }
 
     return buf;
@@ -1048,20 +1050,15 @@ static void vo_x11_dnd_handle_selection(struct vo *vo, XSelectionEvent *se)
 
     if (se->selection == XA(x11, XdndSelection) &&
         se->property == XAs(x11, DND_PROPERTY) &&
-        se->target == x11->dnd_requested_format &&
-        x11->opts->drag_and_drop != -2)
+        se->target == x11->dnd_requested_format)
     {
         int nitems;
         void *prop = x11_get_property(x11, x11->window, XAs(x11, DND_PROPERTY),
                                       x11->dnd_requested_format, 8, &nitems);
         if (prop) {
             enum mp_dnd_action action;
-            if (x11->opts->drag_and_drop >= 0) {
-                action = x11->opts->drag_and_drop;
-            } else {
-                action = x11->dnd_requested_action == XA(x11, XdndActionCopy) ?
-                         DND_REPLACE : DND_APPEND;
-            }
+            action = x11->dnd_requested_action == XA(x11, XdndActionCopy) ?
+                      DND_REPLACE : DND_APPEND;
 
             char *mime_type = x11_dnd_mime_type(x11, x11->dnd_requested_format);
             MP_VERBOSE(x11, "Dropping type: %s (%s)\n",
@@ -1711,6 +1708,12 @@ static void vo_x11_map_window(struct vo *vo, struct mp_rect rc)
     if (mp_input_vo_keyboard_enabled(x11->input_ctx))
         events |= KeyPressMask | KeyReleaseMask;
     vo_x11_selectinput_witherr(vo, x11->display, x11->window, events);
+    if (!x11->opts->focus_on) { // 0 is never, if it is 1 or 2 we don't want to set this property
+        long user_time = 0;
+        XChangeProperty(x11->display, x11->window,
+                        XA(x11, _NET_WM_USER_TIME), XA_CARDINAL, 32,
+                        PropModeReplace, (unsigned char *)&user_time, 1);
+    }
     XMapWindow(x11->display, x11->window);
 
     if (x11->opts->cursor_passthrough)
@@ -1805,12 +1808,12 @@ void vo_x11_config_vo_window(struct vo *vo)
     vo_x11_update_screeninfo(vo);
 
     struct vo_win_geometry geo;
-    vo_calc_window_geometry(vo, &x11->screenrc, &x11->screenrc, x11->dpi_scale,
-                            !x11->pseudo_mapped, &geo);
+    vo_calc_window_geometry(vo, opts, &x11->screenrc, &x11->screenrc, x11->dpi_scale,
+                            !x11->pseudo_mapped, &geo, NULL);
     vo_apply_window_geometry(vo, &geo);
 
     struct mp_rect rc = !x11->pseudo_mapped || opts->auto_window_resize || opts->geometry.wh_valid ||
-                        opts->geometry.xy_valid ? geo.win : x11->nofsrc;
+                        (geo.flags & VO_WIN_FORCE_POS) ? geo.win : x11->nofsrc;
 
     if (x11->parent) {
         vo_x11_update_geometry(vo);
@@ -1841,6 +1844,13 @@ void vo_x11_config_vo_window(struct vo *vo)
     vo_x11_update_geometry(vo);
     update_vo_size(vo);
     x11->pending_vo_events &= ~VO_EVENT_RESIZE; // implicitly done by the VO
+
+    if (opts->focus_on == 2) {
+        long data[5] = {
+            1, // source indication: normal
+        };
+        x11_send_ewmh_msg(x11, "_NET_ACTIVE_WINDOW", data);
+    }
 }
 
 static void vo_x11_sticky(struct vo *vo, bool sticky)
@@ -2051,7 +2061,9 @@ static void vo_x11_minimize(struct vo *vo)
     if (x11->opts->window_minimized) {
         XIconifyWindow(x11->display, x11->window, x11->screen);
     } else {
-        long params[5] = {0};
+        long params[5] = {
+            1, // source indication: normal
+        };
         x11_send_ewmh_msg(x11, "_NET_ACTIVE_WINDOW", params);
     }
 }
@@ -2132,6 +2144,9 @@ int vo_x11_control(struct vo *vo, int *events, int request, void *arg)
                             &x11->opts->window_maximized);
                     vo_x11_maximize(vo);
                 }
+                // Force window repositioning if geometry xy is valid.
+                if (opt == &opts->geometry)
+                    x11->pseudo_mapped = !x11->opts->geometry.xy_valid;
                 vo_x11_set_geometry(vo);
             }
         }
@@ -2324,7 +2339,7 @@ static void set_screensaver(struct vo_x11_state *x11, bool enabled)
         CARD16 state;
         DPMSInfo(mDisplay, &state, &onoff);
         if (!x11->dpms_touched && enabled)
-            return; // enable DPMS only we we disabled it before
+            return; // enable DPMS only if we disabled it before
         if (enabled != !!onoff) {
             MP_VERBOSE(x11, "Setting DMPS: %s.\n", enabled ? "on" : "off");
             if (enabled) {

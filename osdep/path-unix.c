@@ -19,6 +19,7 @@
 
 #include "misc/bstr.h"
 #include "options/path.h"
+#include "osdep/io.h"
 #include "osdep/threads.h"
 #include "path.h"
 
@@ -79,6 +80,8 @@ static void path_init(void)
     if (mp_path_exists(xdg_user_dirs)) {
         char line[4096];
         FILE *user_dirs = fopen(xdg_user_dirs, "r");
+        if (!user_dirs)
+            goto skip_user_dirs;
         while (fgets(line, sizeof(line), user_dirs)) {
             bstr data = bstr0(line);
             if (bstr_eatstart0(&data, "XDG_DESKTOP_DIR=")) {
@@ -94,8 +97,10 @@ static void path_init(void)
                 break;
             }
         }
+        fclose(user_dirs);
     }
 
+skip_user_dirs:
     if (!mpv_desktop[0])
         err = err || MKPATH(mpv_desktop, "%s/%s", home, "Desktop");
 

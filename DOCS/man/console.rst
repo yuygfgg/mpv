@@ -81,6 +81,12 @@ PGDN
 Ctrl+r
     Search the command history. See `SELECT`_ for the key bindings in this mode.
 
+Shift+UP
+    Scroll the log one line up.
+
+Shift+DOWN
+    Scroll the log one line down.
+
 INSERT
     Toggle insert mode.
 
@@ -123,6 +129,8 @@ Configuration
 This script can be customized through a config file ``script-opts/console.conf``
 placed in mpv's user directory and through the ``--script-opts`` command-line
 option. The configuration syntax is described in `mp.options functions`_.
+
+Note that ``mp.input`` clients can selectively override these options.
 
 Configurable Options
 ~~~~~~~~~~~~~~~~~~~~

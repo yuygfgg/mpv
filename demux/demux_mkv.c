@@ -131,6 +131,8 @@ typedef struct mkv_track {
     int forced_track;
     int visual_impaired_track;
     int hearing_impaired_track;
+    int original_track;
+    int commentary_track;
 
     unsigned char *private_data;
     unsigned int private_size;
@@ -142,6 +144,9 @@ typedef struct mkv_track {
     AVCodecContext *av_parser_codec;
 
     bool require_keyframes;
+
+    // VfW mode: block timestamps are real DTS, route them to the packet DTS.
+    bool block_dts;
 
     /* stuff for realaudio braincancer */
     double ra_pts;              /* previous audio timestamp */
@@ -964,6 +969,16 @@ static void parse_trackentry(struct demuxer *demuxer,
         MP_DBG(demuxer, "|  + Hearing-Impaired flag: %d\n", track->hearing_impaired_track);
     }
 
+    if (entry->n_flag_original) {
+        track->original_track = entry->flag_original;
+        MP_DBG(demuxer, "|  + Original flag: %d\n", track->original_track);
+    }
+
+    if (entry->n_flag_commentary) {
+        track->commentary_track = entry->flag_commentary;
+        MP_DBG(demuxer, "|  + Commentary flag: %d\n", track->commentary_track);
+    }
+
     if (entry->n_default_duration) {
         track->default_duration = entry->default_duration / 1e9;
         if (entry->default_duration == 0) {
@@ -1552,6 +1567,8 @@ static void init_track(demuxer_t *demuxer, mkv_track_t *track,
     sh->forced_track = track->forced_track;
     sh->visual_impaired_track = track->visual_impaired_track;
     sh->hearing_impaired_track = track->hearing_impaired_track;
+    sh->original_track = track->original_track;
+    sh->commentary_track = track->commentary_track;
 }
 
 static int demux_mkv_open_video(demuxer_t *demuxer, mkv_track_t *track);
@@ -1633,7 +1650,7 @@ static int demux_mkv_open_video(demuxer_t *demuxer, mkv_track_t *track)
         extradata = track->private_data + 40;
         extradata_size = track->private_size - 40;
         mp_set_codec_from_tag(sh_v);
-        sh_v->avi_dts = true;
+        track->block_dts = true;
     } else if (track->private_size >= RVPROPERTIES_SIZE
                && (!strcmp(track->codec_id, "V_REAL/RV10")
                 || !strcmp(track->codec_id, "V_REAL/RV20")
@@ -1825,7 +1842,7 @@ static void parse_vorbis_chmap(struct mp_chmap *channels, unsigned char *data,
             snprintf(smask, sizeof(smask), "%.*s", (int)(len - 34), data + 34);
             char *end = NULL;
             uint32_t mask = strtol(smask, &end, 0);
-            if (!end || end[0])
+            if (end[0])
                 mask = 0;
             struct mp_chmap chmask = {0};
             mp_chmap_from_waveext(&chmask, mask);
@@ -3094,7 +3111,7 @@ static int handle_block(demuxer_t *demuxer, struct block_info *block_info)
                 dp->pts = current_pts + i * track->default_duration;
                 dp->keyframe = keyframe;
             }
-            if (stream->codec->avi_dts)
+            if (track->block_dts)
                 MPSWAP(double, dp->pts, dp->dts);
             if (i == 0 && block_info->duration_known)
                 dp->duration = block_duration / 1e9;

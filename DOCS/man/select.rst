@@ -7,6 +7,8 @@ providing script bindings that gather and format the data to be selected in the
 console and do operations on the selected item. It can be disabled using the
 ``--load-select=no`` option.
 
+This script is also used to populate the context menu.
+
 Key bindings
 ------------
 
@@ -28,6 +30,12 @@ PGUP and Ctrl+b
 PGDN and Ctrl+f
     Scroll down one page.
 
+Shift+LEFT
+    Scroll left.
+
+Shift+RIGHT
+    Scroll right.
+
 Ctrl+y
     Copy the focused item to the clipboard.
 
@@ -40,6 +48,12 @@ WHEEL_UP
 
 WHEEL_DOWN
     Scroll down.
+
+WHEEL_LEFT and Shift+WHEEL_DOWN
+    Scroll left.
+
+WHEEL_RIGHT and Shift+WHEEL_UP
+    Scroll right.
 
 Typing printable characters does a fuzzy search of the presented items.
 
@@ -54,9 +68,16 @@ By default select.lua's script bindings are bound to key sequences starting with
 ``g`` listed in `Keyboard Control`_. The names of the script bindings listed
 below can be used to bind them to different keys.
 
+All script bindings accept an optional ``keep-open`` argument that
+prevents the menu from closing after a selection.
+
 .. admonition:: Example to rebind playlist selection in input.conf
 
     Ctrl+p script-binding select/select-playlist
+
+.. admonition:: Example to keep the track menu open in input.conf
+
+    g-t script-binding select/select-track keep-open
 
 Available script bindings are:
 
@@ -87,9 +108,6 @@ Available script bindings are:
 
 ``select-subtitle-line``
     Select a subtitle line to seek to. This doesn't work with image subtitles.
-
-    This currently requires ``ffmpeg`` in ``PATH``, or in the same folder as mpv
-    on Windows.
 
 ``select-audio-device``
     Select an audio device.
@@ -138,8 +156,14 @@ Available script bindings are:
 ``open-docs``
     Open mpv's online documentation in the browser.
 
+``open-chat``
+    Open mpv's chat in the browser.
+
 ``menu``
     Show a menu with miscellaneous entries.
+
+``context-menu``
+    Show the context menu.
 
 Configuration
 -------------
@@ -161,3 +185,20 @@ Configurable options
     Default: yes
 
     Whether to show only the last of history entries with the same path.
+
+``menu_conf_path``
+    Default: ~~/menu.conf (see `FILES`_).
+
+    The path from which to read the custom context menu definition (see `CONTEXT
+    MENU`_).
+
+``max_playlist_items``
+    Default: 25
+
+    The maximum number of playlist entries in the context menu.
+
+``populate_menu_data``
+    Default: yes, except for libmpv
+
+    Whether observe the properties referenced in ``menu.conf`` and update
+    ``menu-data`` with suitable menu items after mpv's window is created.

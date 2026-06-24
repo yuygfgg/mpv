@@ -102,8 +102,18 @@ static int vulkan_init(struct ra_hwdec *hw)
     AVVulkanDeviceContext *device_hwctx = device_ctx->hwctx;
 
     device_ctx->user_opaque = (void *)vk->vulkan;
-    device_hwctx->lock_queue = lock_queue;
-    device_hwctx->unlock_queue = unlock_queue;
+    // libavutil deprecated AVVulkanDeviceContext.lock/unlock_queue without
+    // replacement. This prevents us from using queue locking, as those callback
+    // will be removed in lavu. Set those callbacks as long as they are still
+    // present, they will be noop in libplacebo with `VK_KHR_internally_synchronized_queues`.
+    //
+    // It's unclear what will happen to devices that do not support
+    // `VK_KHR_internally_synchronized_queues` when the lock/unlock_queue
+    // callbacks are removed.
+#if LIBAVUTIL_VERSION_MAJOR < 62
+    AV_NOWARN_DEPRECATED(device_hwctx->lock_queue = lock_queue;)
+    AV_NOWARN_DEPRECATED(device_hwctx->unlock_queue = unlock_queue;)
+#endif
     device_hwctx->get_proc_addr = vk->vkinst->get_proc_addr;
     device_hwctx->inst = vk->vkinst->instance;
     device_hwctx->phys_dev = vk->vulkan->phys_device;
@@ -286,6 +296,7 @@ static int mapper_map(struct ra_hwdec_mapper *mapper)
     for (num_images = 0; (vkf->img[num_images] != VK_NULL_HANDLE); num_images++);
     const VkFormat *vk_fmt = av_vkfmt_from_pixfmt(hwfc->sw_format);
 
+    p->vkf = vkf;
     vkfc->lock_frame(hwfc, vkf);
 
     for (int i = 0; i < p->layout.num_planes; i++) {
@@ -344,11 +355,10 @@ static int mapper_map(struct ra_hwdec_mapper *mapper)
         mapper->tex[i] = ratex;
     }
 
-    p->vkf = vkf;
     return 0;
 
  error:
-    vkfc->unlock_frame(hwfc, vkf);
+    // unmap will unlock the frame and clear p->vkf
     mapper_unmap(mapper);
     return -1;
 }

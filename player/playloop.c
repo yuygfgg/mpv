@@ -34,6 +34,7 @@
 #include "common/playlist.h"
 #include "common/stats.h"
 #include "demux/demux.h"
+#include "demux/packet_pool.h"
 #include "filters/f_decoder_wrapper.h"
 #include "filters/filter_internal.h"
 #include "input/input.h"
@@ -296,8 +297,6 @@ static void mp_seek(MPContext *mpctx, struct seek_params seek)
     if (seek.type == MPSEEK_CHAPTER) {
         mpctx->last_chapter_flag = false;
         seek.type = MPSEEK_ABSOLUTE;
-    } else {
-        mpctx->last_chapter_seek = -2;
     }
 
     bool hr_seek_very_exact = seek.exact == MPSEEK_VERY_EXACT;
@@ -458,6 +457,11 @@ void queue_seek(struct MPContext *mpctx, enum seek_type type, double amount,
     struct seek_params *seek = &mpctx->seek;
 
     mp_wakeup_core(mpctx);
+
+    if (type != MPSEEK_CHAPTER) {
+        mpctx->last_chapter_flag = false;
+        mpctx->last_chapter_seek = -2;
+    }
 
     switch (type) {
     case MPSEEK_RELATIVE:
@@ -1315,6 +1319,8 @@ void run_playloop(struct MPContext *mpctx)
     handle_option_callbacks(mpctx);
 
     handle_chapter_change(mpctx);
+
+    handle_force_window(mpctx, false);
 }
 
 void mp_idle(struct MPContext *mpctx)
@@ -1343,6 +1349,7 @@ void idle_loop(struct MPContext *mpctx)
             handle_force_window(mpctx, true);
             mp_wakeup_core(mpctx);
             mp_notify(mpctx, MPV_EVENT_IDLE, NULL);
+            demux_packet_pool_clear(demux_packet_pool_get(mpctx->global));
             need_reinit = false;
         }
         mp_idle(mpctx);

@@ -29,6 +29,7 @@ struct sd {
 
     struct attachment_list *attachments;
     struct mp_codec_params *codec;
+    const char *lang;
 
     // Set to false as soon as the decoder discards old subtitle events.
     // (only needed if sd_functions.accept_packets_in_advance == false)
@@ -51,6 +52,7 @@ struct sd_functions {
                                        int format, double pts);
     char *(*get_text)(struct sd *sd, double pts, enum sd_text_type type);
     struct sd_times (*get_times)(struct sd *sd, double pts);
+    struct sub_lines *(*get_lines)(struct sd *sd);
 };
 
 // lavc_conv.c

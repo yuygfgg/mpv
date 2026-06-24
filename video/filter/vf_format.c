@@ -79,7 +79,6 @@ static void set_params(struct vf_format_opts *p, struct mp_image_params *out,
         out->color.primaries = p->primaries;
     if (p->gamma) {
         enum pl_color_transfer in_gamma = p->gamma;
-        out->color.transfer = p->gamma;
         if (in_gamma != out->color.transfer) {
             // When changing the gamma function explicitly, also reset stuff
             // related to the gamma function since that information will almost
@@ -87,6 +86,7 @@ static void set_params(struct vf_format_opts *p, struct mp_image_params *out,
             out->color.hdr = (struct pl_hdr_metadata){0};
             out->light = MP_CSP_LIGHT_AUTO;
         }
+        out->color.transfer = p->gamma;
     }
     if (out->repr.sys != PL_COLOR_SYSTEM_DOLBYVISION) {
         out->primaries_orig = out->color.primaries;
@@ -256,7 +256,7 @@ static const m_option_t vf_opts_fields[] = {
     {"primaries", OPT_CHOICE_C(primaries, pl_csp_prim_names)},
     {"gamma", OPT_CHOICE_C(gamma, pl_csp_trc_names)},
     {"transfer", OPT_ALIAS("gamma")},
-    {"sig-peak", OPT_FLOAT(sig_peak)},
+    {"sig-peak", OPT_FLOAT(sig_peak), .deprecation_message = "use max-luma"},
     {"light", OPT_CHOICE_C(light, mp_csp_light_names)},
     {"chroma-location", OPT_CHOICE_C(chroma_location, pl_chroma_names)},
     {"stereo-in", OPT_CHOICE_C(stereo_in, mp_stereo3d_names)},

@@ -1044,13 +1044,13 @@ static bool render_frame(struct vo *vo)
     if (in->dropped_frame) {
         MP_STATS(vo, "drop-vo");
     } else {
-        // If the initial redraw request was true or mpv is still playing,
-        // then we can clear it here since we just performed a redraw, or the
-        // next loop will draw what we need. However if there initially is
+        // If the initial redraw request was true and mpv is still playing,
+        // then we can clear it here since the next loop will guarantee that
+        // we draw whatever is needed. However if there initially is
         // no redraw request, then something can change this (i.e. the OSD)
         // while the vo was unlocked. If we are paused, don't touch
-        // in->request_redraw in that case.
-        if (request_redraw || !in->paused)
+        // in->request_redraw in that case and let do_redraw do the work later.
+        if (request_redraw && !in->paused)
             in->request_redraw = false;
     }
 
@@ -1157,7 +1157,7 @@ static MP_THREAD_VOID vo_thread(void *ptr)
                 wakeup_core(vo);
             }
         }
-        if (vo->want_redraw && !in->want_redraw) {
+        if (vo->want_redraw) {
             in->want_redraw = true;
             wakeup_core(vo);
         }
@@ -1182,15 +1182,14 @@ static MP_THREAD_VOID vo_thread(void *ptr)
         if (send_pause)
             vo->driver->control(vo, vo_paused ? VOCTRL_PAUSE : VOCTRL_RESUME, NULL);
         if (wait_until > now && redraw) {
-            // Allow manual redraws at most at slightly over display fps.
-            int64_t max_interval = (MP_TIME_S_TO_NS(1) / MPMAX(in->display_fps, 10)) / 1.1;
+            // Allow manual redraws at most at display fps.
+            int64_t max_interval = in->vsync_interval > 1 ? in->vsync_interval : 0;
             // Some windowing platforms break if we submit frames too fast.
             if (vo->previous_redraw_time + max_interval <= now) {
                 vo->driver->control(vo, VOCTRL_REDRAW, NULL);
                 do_redraw(vo); // now is a good time
                 vo->previous_redraw_time = now;
             } else {
-                in->request_redraw = true;
                 wait_vo(vo, now + max_interval);
             }
             continue;

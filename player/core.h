@@ -32,6 +32,7 @@
 #include "video/mp_image.h"
 #include "video/out/vo.h"
 #include "osdep/als.h"
+#include "demux/stheader.h"
 
 // definitions used internally by the core player code
 
@@ -97,7 +98,6 @@ struct frame_info {
     double pts;
     double duration;        // PTS difference to next frame
     double approx_duration; // possibly fixed/smoothed out duration
-    double av_diff;         // A/V diff at time of scheduling
     int num_vsyncs;         // scheduled vsyncs, if using display-sync
 };
 
@@ -115,11 +115,11 @@ struct track {
     int demuxer_id; // same as stream->demuxer_id. -1 if not set.
     int ff_index; // same as stream->ff_index, or 0.
     int hls_bitrate; // same as stream->hls_bitrate. 0 if not set.
-    int program_id; // same as stream->program_id. -1 if not set.
 
     char *title;
     bool default_track, forced_track, dependent_track;
     bool visual_impaired_track, hearing_impaired_track;
+    bool original_track, commentary_track;
     bool forced_select; // if the track was selected because it is forced
     bool image;
     bool attached_picture;
@@ -152,6 +152,12 @@ struct track {
     struct ao_chain *ao_c;
     struct mp_pin *sink;
 };
+
+// Returns true if the track belongs to the given program.
+static inline bool track_has_program(const struct track *track, int program_id)
+{
+    return track->stream && sh_stream_has_program(track->stream, program_id);
+}
 
 // Summarizes video filtering and output.
 struct vo_chain {
@@ -263,6 +269,7 @@ typedef struct MPContext {
     char *term_osd_title;
     char *last_window_title;
     struct voctrl_playback_state vo_playback_state;
+    int64_t vo_playback_state_time;
 
     int add_osd_seek_info; // bitfield of enum mp_osd_seek_info
     double osd_visible; // for the osd bar only
@@ -344,7 +351,8 @@ typedef struct MPContext {
     // update_playback_speed() updates them from the other fields.
     double audio_speed, video_speed;
     bool display_sync_active;
-    int display_sync_drift_dir;
+    double audio_drift_compensation;
+    double avd_filtered;
     // Timing error (in seconds) due to rounding on vsync boundaries
     double display_sync_error;
     // Number of mistimed frames.
@@ -550,10 +558,11 @@ struct playlist_entry *mp_next_file(struct MPContext *mpctx, int direction,
 void mp_set_playlist_entry(struct MPContext *mpctx, struct playlist_entry *e);
 void mp_play_files(struct MPContext *mpctx);
 void update_demuxer_properties(struct MPContext *mpctx);
+bool track_is_visible(struct MPContext *mpctx, struct track *track);
 void print_track_list(struct MPContext *mpctx, const char *msg);
 void reselect_demux_stream(struct MPContext *mpctx, struct track *track,
                            bool refresh_only);
-void prepare_playlist(struct MPContext *mpctx, struct playlist *pl);
+void prepare_playlist(struct MPContext *mpctx, struct playlist *pl, bool overwrite_current);
 void autoload_external_files(struct MPContext *mpctx, struct mp_cancel *cancel);
 struct track *select_default_track(struct MPContext *mpctx, int order,
                                    enum stream_type type);
@@ -580,7 +589,6 @@ void update_window_title(struct MPContext *mpctx, bool force);
 void error_on_track(struct MPContext *mpctx, struct track *track);
 int stream_dump(struct MPContext *mpctx, const char *source_filename);
 double get_track_seek_offset(struct MPContext *mpctx, struct track *track);
-bool str_in_list(bstr str, char **list);
 char *mp_format_track_metadata(void *ctx, struct track *t, bool add_lang);
 const char *mp_find_non_filename_media_title(MPContext *mpctx);
 

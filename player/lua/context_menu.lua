@@ -15,6 +15,7 @@ You should have received a copy of the GNU Lesser General Public
 License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
 ]]
 
+local utils = require "mp.utils"
 local assdraw = require "mp.assdraw"
 
 local options = {
@@ -24,6 +25,7 @@ local options = {
     padding_y = 4,
     menu_outline_size = 0,
     menu_outline_color = "#FFFFFF",
+    background_alpha = 0,
     corner_radius = 5,
     scale_with_window = "auto",
     focused_color = "#222222",
@@ -128,6 +130,24 @@ local function get_right_aligned_text(item)
            (item.submenu and "▸" or "")
 end
 
+local function set_hint(item)
+    if not item.title then
+        return
+    end
+
+    local hint_pos, _, hint = item.title:find("^&([^&])")
+
+    if not hint_pos then
+        hint_pos, _, hint = item.title:find("[^&]&([^&])")
+        if hint_pos then
+            hint_pos = hint_pos + 1
+        end
+    end
+
+    item.hint_pos = hint_pos
+    item.hint = hint
+end
+
 local function calculate_width(menu_items, osd_w, osd_h, checkbox)
     local titles = {}
     for _, item in pairs(menu_items) do
@@ -139,9 +159,12 @@ local function calculate_width(menu_items, osd_w, osd_h, checkbox)
     end
 
     local longest = ""
+    local longest_width = 0
     for _, title in pairs(titles) do
-        if #title > #longest then
+        local title_width = utils.terminal_display_width(title)
+        if title_width > longest_width then
             longest = title
+            longest_width = title_width
         end
     end
 
@@ -185,6 +208,7 @@ local function add_menu(menu_items, x, y)
     for _, item in ipairs(menu_items) do
         if not has_state(item, "hidden") then
             visible_items[#visible_items + 1] = item
+            set_hint(item)
         end
     end
 
@@ -274,7 +298,13 @@ local function append_item(ass, menu, level, style, item, item_y,
         ass:append("{\\1a&HFF&}✔ {\\1a&}")
     end
 
-    ass:append(escape(item.title))
+    if item.hint then
+        ass:append(escape(item.title:sub(1, item.hint_pos - 1):gsub("&&", "&")) ..
+                   "{\\u1}" .. item.hint .. "{\\u}"  ..
+                   escape(item.title:sub(item.hint_pos + 2):gsub("&&", "&")))
+    else
+        ass:append(escape(item.title:gsub("&&", "&")))
+    end
 
     if item.submenu or item.shortcut then
         ass:new_event()
@@ -346,7 +376,8 @@ local function add_submenu(ass, menu, level, style, background_style)
             ass:new_event()
             ass:an(7)
             ass:pos(menu.x, item_y - line_height / 2)
-            ass:append(style)
+            ass:append(style .. "{\\1c&H" ..
+                       color_option_to_ass(options.disabled_color) .. "&}")
             ass:draw_start()
             ass:rect_cw(0, -1, menu.width, 0)
             ass:draw_stop()
@@ -385,7 +416,8 @@ local function render()
         back_color = "222222"
     end
 
-    local background_style = "{\\1c&H" .. back_color .. "&" ..
+    local background_style = "{\\1c&H" .. back_color ..
+                       "&\\1a&H" .. string.format("%x", options.background_alpha) ..
                        "&\\bord" .. options.menu_outline_size .. "\\3c&H" ..
                        color_option_to_ass(options.menu_outline_color) ..
                        "\\blur0&}"
@@ -463,7 +495,7 @@ local function handle_mouse_move()
         open_submenu_timer = nil
     end
 
-    if item and item.data.submenu then
+    if item and item.data.submenu and not has_state(item.data, "disabled") then
         open_submenu_timer = mp.add_timeout(options.seconds_to_open_submenus, function ()
             open_submenu()
         end)
@@ -565,6 +597,14 @@ local function handle_click()
     activate_focused_item()
 end
 
+local function handle_esc()
+    if focused_level > 1 then
+        close_submenu()
+    else
+        close()
+    end
+end
+
 local function activate_shortcut(info)
     if info.event == "up" then
         return
@@ -576,7 +616,7 @@ local function activate_shortcut(info)
    end
 
    for i, item in ipairs(items[focused_level]) do
-        if (item.data.title or ""):sub(1, 1):lower() == info.key_text then
+        if (item.data.hint or ""):lower() == info.key_text:lower() then
            focused_index = i
            activate_focused_item(true)
            break
@@ -598,7 +638,7 @@ local bindings = {
     PGUP = focus_first,
     PGDWN = focus_last,
     ENTER = function () activate_focused_item(true) end,
-    ESC = function () close() end,
+    ESC = handle_esc,
     ANY_UNICODE = activate_shortcut,
 }
 for _, key in pairs({"UP", "DOWN", "LEFT", "RIGHT", "HOME", "END", "PGUP",
@@ -614,6 +654,8 @@ close = function ()
     for key, _ in pairs(bindings) do
         mp.remove_key_binding("_context_menu_" .. key)
     end
+
+    mp.set_property_native("user-data/mpv/context-menu/open", false)
 end
 
 mp.register_script_message("open", function ()
@@ -641,6 +683,8 @@ mp.register_script_message("open", function ()
             complex = key == "ANY_UNICODE",
         })
     end
+
+    mp.set_property_native("user-data/mpv/context-menu/open", true)
 end)
 
 mp.register_script_message("select", function ()
@@ -649,4 +693,4 @@ mp.register_script_message("select", function ()
     end
 end)
 
-require "mp.options".read_options(options)
+require "mp.options".read_options(options, nil, function () end)

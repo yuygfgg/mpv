@@ -7,7 +7,7 @@ local o = {
     include = "^%w+%.youtube%.com/|^youtube%.com/|^youtu%.be/|^%w+%.twitch%.tv/|^twitch%.tv/",
     try_ytdl_first = false,
     use_manifests = false,
-    all_formats = false,
+    all_formats = true,
     force_all_formats = true,
     thumbnails = "none",
     ytdl_path = "",
@@ -26,6 +26,7 @@ options.read_options(o, nil, function()
 end)
 
 local chapter_list = {}
+local metadata = {}
 local playlist_cookies = {}
 local playlist_metadata = {}
 
@@ -37,6 +38,7 @@ end
 
 -- youtube-dl JSON name to mpv tag name
 local tag_list = {
+    ["title"]           = "title",
     ["artist"]          = "artist",
     ["album"]           = "album",
     ["album_artist"]    = "album_artist",
@@ -61,8 +63,6 @@ local tag_list = {
     ["is_live"]         = "ytdl_is_live",
     ["release_year"]    = "ytdl_release_year",
     ["description"]     = "ytdl_description",
-    -- "title" is handled by force-media-title
-    -- tags don't work with all_formats=yes
 }
 
 local safe_protos = Set {
@@ -79,6 +79,8 @@ local ext_map = {
 
 local codec_map = {
     -- src pattern  = mpv codec
+    ["ass"]         = "ass",
+    ["srt"]         = "subrip",
     ["vtt"]         = "webvtt",
     ["opus"]        = "opus",
     ["vp9"]         = "vp9",
@@ -88,6 +90,10 @@ local codec_map = {
     ["mp4a%..*"]    = "aac",
     ["hev1%..*"]    = "hevc",
 }
+
+if mp.get_property_native("subrandr-version") ~= nil then
+    codec_map["srv3"] = "subrandr/srv3"
+end
 
 -- Codec name as reported by youtube-dl mapped to mpv internal codec names.
 -- Fun fact: mpv will not really use the codec, but will still try to initialize
@@ -113,7 +119,7 @@ end
 
 local function exec(args)
     return mp.command_native({
-        name = "subprocess",
+        _name = "subprocess",
         args = args,
         capture_stdout = true,
         capture_stderr = true,
@@ -189,40 +195,33 @@ local function parse_cookies(cookies_line)
     return cookies
 end
 
--- serialize cookies for avformat
-local function serialize_cookies_for_avformat(cookies)
+-- serialize cookies in Netscape cookies.txt format
+local function serialize_cookies(cookies)
     local result = ''
     for _, cookie in pairs(cookies) do
-        local cookie_str = ('%s=%s; '):format(cookie.name, cookie.value:gsub('^"(.+)"$', '%1'))
-        for k, v in pairs(cookie) do
-            if k ~= "name" and k ~= "value" then
-                cookie_str = cookie_str .. ('%s=%s; '):format(k, v)
-            end
-        end
-        result = result .. cookie_str .. '\r\n'
+        local domain = cookie.domain or ""
+        result = result .. ("%s\t%s\t%s\t%s\t%s\t%s\t%s\n"):format(
+            domain,
+            (domain:sub(1, 1) == ".") and "TRUE" or "FALSE",
+            cookie.path or "/",
+            cookie.secure and "TRUE" or "FALSE",
+            cookie.expires or "0",
+            cookie.name,
+            cookie.value:gsub('^"(.+)"$', '%1'))
     end
     return result
 end
 
--- set file-local cookies, preserving existing ones
+-- set file-local cookies-file pointing at an in-memory cookies.txt
 local function set_cookies(cookies)
     if not cookies or cookies == "" then
         return
     end
-
-    local option_key = "file-local-options/stream-lavf-o"
-    local stream_opts = mp.get_property_native(option_key, {})
-    local existing_cookies = parse_cookies(stream_opts["cookies"])
-
-    local new_cookies = parse_cookies(cookies)
-    for cookie_key, cookie in pairs(new_cookies) do
-        if not existing_cookies[cookie_key] then
-            existing_cookies[cookie_key] = cookie
-        end
+    local data = serialize_cookies(parse_cookies(cookies))
+    if data ~= "" then
+        mp.set_property_bool("file-local-options/cookies", true)
+        mp.set_property("file-local-options/cookies-file", "memory://" .. data)
     end
-
-    stream_opts["cookies"] = serialize_cookies_for_avformat(existing_cookies)
-    mp.set_property_native(option_key, stream_opts)
 end
 
 local function append_libav_opt(props, name, value)
@@ -482,13 +481,18 @@ local function formats_to_edl(json, formats, use_all_formats)
     local streams = {}
 
     local tbr_only = true
+    local has_video_only = false
     for _, track in ipairs(formats) do
         tbr_only = tbr_only and track["tbr"] and
                    (not track["abr"]) and (not track["vbr"])
+        local video_only = track.vcodec and track.vcodec ~= "none"
+                      and (not track.acodec or track.acodec == "none")
+        has_video_only = has_video_only or video_only
     end
 
     local has_requested_video = false
     local has_requested_audio = false
+    local next_program_id = 0
     -- Web players with quality selection always show the highest quality
     -- option at the top. Since tracks are usually listed with the first
     -- track at the top, that should also be the highest quality track.
@@ -533,6 +537,13 @@ local function formats_to_edl(json, formats, use_all_formats)
         local skip = #tracks == 0
         local params = ""
 
+        -- For DASH-style sources (video-only + audio-only streams), only video
+        -- formats get a program_id. Audio-only formats are shared across all
+        -- editions. For muxed sources, every format including audio_only becomes
+        -- a separate edition.
+        local has_video = track.vcodec and track.vcodec ~= "none"
+        local dominated = has_video or not has_video_only
+
         if use_all_formats then
             for _, sub in ipairs(tracks) do
                 -- A single track that is either audio or video. Delay load it.
@@ -576,7 +587,11 @@ local function formats_to_edl(json, formats, use_all_formats)
                 end
                 hdr[#hdr + 1] = "!track_meta,title=" ..
                     edl_escape(title) .. ",byterate=" .. byterate ..
+                    (dominated and ",program_id=" .. next_program_id or "") ..
                     (#flags > 0 and ",flags=" .. table.concat(flags, "+") or "")
+            end
+            if dominated then
+                next_program_id = next_program_id + 1
             end
 
             if duration > 0 then
@@ -623,7 +638,6 @@ end
 local function add_single_video(json)
     local streamurl = ""
     local format_info = ""
-    local max_bitrate = 0
     local requested_formats = json["requested_formats"] or json["requested_downloads"]
     local all_formats = json["formats"]
     local has_requested_formats = requested_formats and #requested_formats > 0
@@ -649,13 +663,10 @@ local function add_single_video(json)
 
         streamurl = mpd_url
 
-        if requested_formats then
-            for _, track in pairs(requested_formats) do
-                max_bitrate = (track.tbr and track.tbr > max_bitrate) and
-                    track.tbr or max_bitrate
+        for json_name, mp_name in pairs(tag_list) do
+            if json[json_name] then
+                metadata[mp_name] = tostring(json[json_name])
             end
-        elseif json.tbr then
-            max_bitrate = json.tbr > max_bitrate and json.tbr or max_bitrate
         end
     end
 
@@ -710,17 +721,6 @@ local function add_single_video(json)
     msg.debug("streamurl: " .. streamurl)
 
     mp.set_property("stream-open-filename", streamurl:gsub("^data:", "data://", 1))
-
-    if mp.get_property("force-media-title", "") == "" then
-        mp.set_property("file-local-options/force-media-title", json.title)
-    end
-
-    -- set hls-bitrate for dash track selection
-    if max_bitrate > 0 and
-        not option_was_set("hls-bitrate") and
-        not option_was_set_locally("hls-bitrate") then
-        mp.set_property_native('file-local-options/hls-bitrate', max_bitrate*1000)
-    end
 
     -- add subtitles
     if json.requested_subtitles ~= nil then
@@ -844,18 +844,23 @@ local function add_single_video(json)
             "rtmp_app", json.app)
     end
 
-    if json.proxy and json.proxy ~= "" then
-        stream_opts = append_libav_opt(stream_opts,
-            "http_proxy", json.proxy)
+    if json.proxy and json.proxy ~= "" and not option_was_set("http-proxy") then
+        mp.set_property("file-local-options/http-proxy", json.proxy)
     end
 
-    if cookies and cookies ~= "" then
-        local existing_cookies = parse_cookies(stream_opts["cookies"])
-        local new_cookies = parse_cookies(cookies)
-        for cookie_key, cookie in pairs(new_cookies) do
-            existing_cookies[cookie_key] = cookie
+    set_cookies(cookies)
+
+    local chunk_size = math.huge
+    if has_requested_formats then
+        for _, f in pairs(requested_formats) do
+            if f.downloader_options and f.downloader_options.http_chunk_size then
+                chunk_size = math.min(chunk_size, tonumber(f.downloader_options.http_chunk_size))
+            end
         end
-        stream_opts["cookies"] = serialize_cookies_for_avformat(existing_cookies)
+    end
+    if chunk_size < math.huge then
+        stream_opts = append_libav_opt(stream_opts, "request_size", tostring(chunk_size))
+        mp.set_property_native("file-local-options/curl-max-request-size", chunk_size)
     end
 
     mp.set_property_native("file-local-options/stream-lavf-o", stream_opts)
@@ -1044,7 +1049,7 @@ local function run_ytdl_hook(url)
 
             -- can't change the http headers for each entry, so use the 1st
             set_http_headers(json.entries[1].http_headers)
-            set_cookies(json.entries[1].cookies or json.cookies)
+            playlist_cookies[playlist] = json.entries[1].cookies or json.cookies
 
             mp.set_property("stream-open-filename", playlist)
             if json.title and mp.get_property("force-media-title", "") == "" then
@@ -1139,8 +1144,7 @@ local function run_ytdl_hook(url)
 
     else -- probably a video
         -- add playlist metadata if any belongs to the current video
-        local metadata = playlist_metadata[mp.get_property("playlist-path")] or {}
-        for key, value in pairs(metadata) do
+        for key, value in pairs(playlist_metadata[mp.get_property("playlist-path")] or {}) do
             json[key] = value
         end
 
@@ -1180,6 +1184,11 @@ mp.add_hook("on_preloaded", 10, function ()
         mp.set_property_native("chapter-list", chapter_list)
         chapter_list = {}
     end
+
+    for key, value in pairs(metadata) do
+        mp.set_property("metadata/by-key/" .. key, value)
+    end
+    metadata = {}
 end)
 
 mp.add_hook("on_after_end_file", 50, function ()

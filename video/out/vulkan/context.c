@@ -35,7 +35,7 @@ struct vulkan_opts {
 
 static inline OPT_STRING_VALIDATE_FUNC(vk_validate_dev)
 {
-    int ret = M_OPT_INVALID;
+    int ret = M_OPT_EXIT;
     void *ta_ctx = talloc_new(NULL);
     pl_log pllog = mppl_log_create(ta_ctx, log);
     if (!pllog)
@@ -45,13 +45,17 @@ static inline OPT_STRING_VALIDATE_FUNC(vk_validate_dev)
     mppl_log_set_probing(pllog, true);
     pl_vk_inst inst = pl_vk_inst_create(pllog, pl_vk_inst_params());
     mppl_log_set_probing(pllog, false);
-    if (!inst)
+    if (!inst) {
+        mp_info(log, "Failed to create Vulkan instance\n");
         goto done;
+    }
 
     uint32_t num = 0;
     VkResult res = vkEnumeratePhysicalDevices(inst->instance, &num, NULL);
-    if (res != VK_SUCCESS)
+    if (res != VK_SUCCESS) {
+        mp_info(log, "Failed to enumerate Vulkan devices\n");
         goto done;
+    }
 
     VkPhysicalDevice *devices = talloc_array(ta_ctx, VkPhysicalDevice, num);
     res = vkEnumeratePhysicalDevices(inst->instance, &num, devices);
@@ -59,18 +63,25 @@ static inline OPT_STRING_VALIDATE_FUNC(vk_validate_dev)
         goto done;
 
     struct bstr param = bstr0(*value);
-    bool help = bstr_equals0(param, "help");
-    if (help) {
-        mp_info(log, "Available vulkan devices:\n");
-        ret = M_OPT_EXIT;
+    if (!param.len) {
+        mp_err(log, "No Vulkan device specified.\n");
+        ret = M_OPT_INVALID;
+        goto done;
     }
+    bool help = bstr_equals0(param, "help");
+    if (help)
+        mp_info(log, "Available vulkan devices:\n");
 
     AVUUID param_uuid;
     bool is_uuid = av_uuid_parse(*value, param_uuid) == 0;
 
     for (int i = 0; i < num; i++) {
+        VkPhysicalDeviceDriverProperties driver_prop = { 0 };
+        driver_prop.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
+
         VkPhysicalDeviceIDPropertiesKHR id_prop = { 0 };
         id_prop.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES_KHR;
+        id_prop.pNext = &driver_prop;
 
         VkPhysicalDeviceProperties2KHR prop2 = { 0 };
         prop2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2_KHR;
@@ -83,9 +94,10 @@ static inline OPT_STRING_VALIDATE_FUNC(vk_validate_dev)
         if (help) {
             char device_uuid[37];
             av_uuid_unparse(id_prop.deviceUUID, device_uuid);
-            mp_info(log, "  '%s' (GPU %d, PCI ID %x:%x, UUID %s)\n",
+            mp_info(log, "  '%s' (GPU %d, PCI ID %x:%x, UUID %s, Driver %s)\n",
                     prop->deviceName, i, (unsigned)prop->vendorID,
-                    (unsigned)prop->deviceID, device_uuid);
+                    (unsigned)prop->deviceID, device_uuid,
+                    driver_prop.driverName);
         } else if (bstr_equals0(param, prop->deviceName)) {
             ret = 0;
             goto done;
@@ -184,7 +196,9 @@ pl_vulkan mppl_create_vulkan(struct vulkan_opts *opts,
      * of the ffmpeg Vulkan hwcontext and video decoding capability.
      */
     const char *opt_extensions[] = {
+#if LIBAVUTIL_VERSION_INT < AV_VERSION_INT(60, 26, 0)
         VK_EXT_DESCRIPTOR_BUFFER_EXTENSION_NAME,
+#endif
         VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME,
         VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,
         VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME,
@@ -325,16 +339,22 @@ pl_vulkan mppl_create_vulkan(struct vulkan_opts *opts,
        .dynamicRendering = true,
     };
 
+#if LIBAVUTIL_VERSION_INT < AV_VERSION_INT(60, 26, 0)
     VkPhysicalDeviceDescriptorBufferFeaturesEXT descriptor_buffer_feature = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_BUFFER_FEATURES_EXT,
         .pNext = &dynamic_rendering_feature,
         .descriptorBuffer = true,
         .descriptorBufferPushDescriptors = true,
     };
+#endif
 
     VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomic_float_feature = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT,
+#if LIBAVUTIL_VERSION_INT < AV_VERSION_INT(60, 26, 0)
         .pNext = &descriptor_buffer_feature,
+#else
+        .pNext = &dynamic_rendering_feature,
+#endif
         .shaderBufferFloat32Atomics = true,
         .shaderBufferFloat32AtomicAdd = true,
     };
@@ -343,6 +363,11 @@ pl_vulkan mppl_create_vulkan(struct vulkan_opts *opts,
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
         .pNext = &atomic_float_feature,
         .scalarBlockLayout = true,
+        .shaderUniformBufferArrayNonUniformIndexing = true,
+        .shaderSampledImageArrayNonUniformIndexing = true,
+        .shaderStorageBufferArrayNonUniformIndexing = true,
+        .shaderStorageImageArrayNonUniformIndexing = true,
+        .runtimeDescriptorArray = true,
         .shaderBufferInt64Atomics = true,
         .uniformBufferStandardLayout = true,
     };
@@ -420,6 +445,7 @@ bool ra_vk_ctx_init(struct ra_ctx *ctx, struct mpvk_ctx *vk,
         .surface = vk->surface,
         .present_mode = preferred_mode,
         .swapchain_depth = ctx->vo->opts->swapchain_depth,
+        .alpha_bits = ctx->opts.want_alpha ? 8 : 0,
     };
 
     if (p->opts->swap_mode >= 0) // user override
@@ -518,6 +544,37 @@ static void get_vsync(struct ra_swapchain *sw,
         p->params.get_vsync(sw->ctx, info);
 }
 
+static bool set_color(struct ra_swapchain *sw, struct mp_image_params *params)
+{
+    struct priv *p = sw->priv;
+
+    // Vulkan Wayland needs special handling to avoid duplicated color surface.
+    bool waylandvk = strcmp(sw->ctx->fns->name, "waylandvk") == 0;
+    // Assume anything else is supported when set_color is defined. However,
+    // everything else can use Vulkan API colorspace without issues, so unlikely
+    // that set_color is used outside of Wayland.
+    bool supported = PL_API_VER >= 361 || !waylandvk;
+    if (supported && p->params.set_color) {
+        if (waylandvk && params) {
+          // Request VK_COLOR_SPACE_PASS_THROUGH_EXT, and also force immediate
+          // cleanup of swapchain retired by pl_swapchain_colorspace_hint,
+          // otherwise there's a possibility the Wayland color surface will be
+          // held while we try to create a new one.
+          pl_swapchain_colorspace_hint(p->vk->swapchain,
+                                       &(struct pl_color_space){0});
+        }
+        bool ret = p->params.set_color(sw->ctx, params);
+        // To avoid ping-pong between VK_COLOR_SPACE_PASS_THROUGH_EXT and others,
+        // we assume that internal Wayland set_color always work, and update
+        // params to fallback values if needed.
+        mp_assert(ret || !waylandvk);
+        return ret;
+    }
+    // Technically we could call pl_swapchain_colorspace_hint() here directly,
+    // but we want to know when parameters are set "externally".
+    return false;
+}
+
 static pl_color_space_t target_csp(struct ra_swapchain *sw)
 {
     struct priv *p = sw->priv;
@@ -528,6 +585,7 @@ static pl_color_space_t target_csp(struct ra_swapchain *sw)
 
 static const struct ra_swapchain_fns vulkan_swapchain = {
     .color_depth   = color_depth,
+    .set_color     = set_color,
     .target_csp    = target_csp,
     .start_frame   = start_frame,
     .submit_frame  = submit_frame,

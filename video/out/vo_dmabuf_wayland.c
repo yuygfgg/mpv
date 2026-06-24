@@ -43,7 +43,7 @@
 #endif
 
 // Generated from wayland-protocols
-#include "linux-dmabuf-unstable-v1.h"
+#include "linux-dmabuf-v1.h"
 #include "viewporter.h"
 #include "single-pixel-buffer-v1.h"
 
@@ -629,9 +629,9 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
     pts = frame->current ? frame->current->pts : 0;
     if (frame->current) {
         buf = buffer_get(vo, frame);
+        vo_wayland_handle_color(wl, &p->target_params);
 
         if (buf && buf->frame) {
-            vo_wayland_handle_color(wl);
             struct mp_image *image = buf->frame->current;
             wl_surface_attach(wl->video_surface, buf->buffer, 0, 0);
             wl_surface_damage_buffer(wl->video_surface, 0, 0, image->w,
@@ -734,6 +734,7 @@ done:
     p->target_params = img->params;
     // Restore fallback layer parameters if available.
     mp_image_params_restore_dovi_mapping(&p->target_params);
+    mp_image_params_guess_csp(&p->target_params);
     // Strip metadata that is not understood anyway.
     struct pl_hdr_metadata *hdr = &p->target_params.color.hdr;
     hdr->scene_max[0] = hdr->scene_max[1] = hdr->scene_max[2] = 0;

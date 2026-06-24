@@ -142,7 +142,7 @@ struct gl_video_opts {
     int sdr_adjust_gamma;
     int treat_srgb_as_power22;
     int target_contrast;
-    int target_gamut;
+    char *target_gamut;
     struct gl_tone_map_opts tone_map;
     bool correct_downscaling;
     bool linear_downscaling;
@@ -193,6 +193,9 @@ enum {
     RENDER_SCREEN_COLOR = 1 << 3, // 3D LUT and dithering
     RENDER_FRAME_DEF = RENDER_FRAME_SUBS | RENDER_FRAME_OSD | RENDER_SCREEN_COLOR,
 };
+
+void scaler_conf_merge(struct scaler_config *dst, const struct scaler_config *src,
+                       enum scaler_unit unit);
 
 struct gl_video *gl_video_init(struct ra *ra, struct mp_log *log,
                                struct mpv_global *g);
