@@ -19,6 +19,7 @@
 #define MPV_COREAUDIO_CHMAP_H
 
 #include "config.h"
+#include <TargetConditionals.h>
 #include <AudioToolbox/AudioToolbox.h>
 
 struct mp_chmap;
@@ -30,9 +31,11 @@ AudioChannelLabel mp_speaker_id_to_ca_label(int speaker_id);
 AudioChannelLayout *ca_find_standard_layout(void *talloc_ctx, AudioChannelLayout *l);
 AudioChannelLayout *ca_get_acl(struct ao *ao, size_t *out_layout_size);
 void ca_log_layout(struct ao *ao, int l, AudioChannelLayout *layout);
+#if HAVE_COREAUDIO
 bool ca_init_chmap(struct ao *ao, AudioDeviceID device);
 void ca_get_active_chmap(struct ao *ao, AudioDeviceID device, int channel_count,
                          struct mp_chmap *out_map);
+#endif
 #endif
 
 #endif

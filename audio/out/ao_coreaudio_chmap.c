@@ -405,6 +405,10 @@ coreaudio_error:
     return false;
 }
 
+#if HAVE_COREAUDIO
+// Device-querying helpers below use the CoreAudio HAL (AudioObject*/
+// AudioDeviceID), which is macOS-only. iOS/tvOS have a single fixed output and
+// no device selection, so these are not needed (and not even available there).
 static AudioChannelLayout* ca_query_layout(struct ao *ao,
                                            AudioDeviceID device,
                                            void *talloc_ctx)
@@ -532,4 +536,5 @@ void ca_get_active_chmap(struct ao *ao, AudioDeviceID device, int channel_count,
     MP_WARN(ao, "mismatching channels - falling back to %s\n",
             mp_chmap_to_str(out_map));
 }
+#endif // HAVE_COREAUDIO
 #endif
